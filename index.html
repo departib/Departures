@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta name="robots" content="noindex,nofollow">
+  <meta charset="UTF-8" />
+  <title>Inflatabubble Departures</title>
+  <style>
+    body{background:#111;color:#ffcc00;font-family:monospace;margin:0}
+    h1{margin:20px 0;text-align:center;font-size:3em}
+    table{width:100%;border-collapse:collapse;font-size:2em;table-layout:fixed}
+    col.time{width:20%} col.party{width:60%} col.status{width:20%}
+    thead th{background:#222}
+    th,td{padding:20px;border-bottom:2px solid #333;vertical-align:middle}
+    th:nth-child(1),td:nth-child(1){text-align:left;padding-left:40px}
+    th:nth-child(2),td:nth-child(2){text-align:left}
+    th:nth-child(3),td:nth-child(3){text-align:right;padding-right:40px}
+    .status-now{color:#00e676}
+    .status-closed{color:#ff5252}
+    .flap{display:inline-block;transform-origin:bottom;animation:flap .6s ease}
+    @keyframes flap{0%{transform:rotateX(90deg);opacity:0}100%{transform:rotateX(0);opacity:1}}
+  </style>
+</head>
+<body>
+  <h1>✈ Departures</h1>
+  <table id="departures">
+    <colgroup>
+      <col class="time" />
+      <col class="party" />
+      <col class="status" />
+    </colgroup>
+    <thead>
+      <tr><th>Time</th><th>Party</th><th>Status</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <audio id="flipSound" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" preload="auto"></audio>
+
+  <script>
+    // ---- Settings ----
+    const SHEET_URL = "https://opensheet.elk.sh/1C30nrkK_fqBK7i9c8_kABHPWkdETjaGMY3PyOifOI6k/1";
+    const HIDE_AFTER_MINUTES = 120;      // hide 2 hours after start
+    const BOARDING_SOON_BEFORE = 15;     // mins before start
+    const NOW_BOARDING_BEFORE = 10;      // mins before start
+    const CLOSED_AFTER = 10;             // mins after start (then show Closed)
+    const REFRESH_MS = 60000;            // 60s
+    const flipSound = document.getElementById("flipSound");
+
+    // ---- Helpers ----
+    const clean = s => String(s||"").replace(/\u202F|\u00A0/g," ").replace(/â€¯/g," ").trim();
+
+    function ordinal(n){
+      const x = parseInt(n,10);
+      if ([11,12,13].includes(x % 100)) return x + "th";
+      const last = x % 10;
+      return x + (last===1?"st":last===2?"nd":last===3?"rd":"th");
+    }
+
+    function ymd(d){
+      const yy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const dd = String(d.getDate()).padStart(2,"0");
+      return `${yy}-${mm}-${dd}`;
+    }
+
+    // Parse a sheet date string and return a Date *only if it equals today* in either MM/DD or DD/MM (or ISO)
+    function dateIsTodayAndReturn(s){
+      const t = clean(s);
+      if (!t) return null;
+
+      const today = new Date();
+      const todayKey = ymd(new Date(today.getFullYear(), today.getMonth(), today.getDate()));
+
+      // ISO YYYY-MM-DD first
+      if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(t)) {
+        const [Y,M,D] = t.split("-").map(n=>parseInt(n,10));
+        const d = new Date(Y, M-1, D);
+        return (ymd(d)===todayKey) ? d : null;
+      }
+
+      // Slashed date (ambiguous): try BOTH MM/DD and DD/MM
+      const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+      if (m){
+        let a = parseInt(m[1],10), b = parseInt(m[2],10), c = parseInt(m[3],10);
+        if (c < 100) c += 2000;
+
+        const dUS = new Date(c, a-1, b); // MM/DD
+        if (ymd(dUS) === todayKey) return dUS;
+
+        const dEU = new Date(c, b-1, a); // DD/MM
+        if (ymd(dEU) === todayKey) return dEU;
+      }
+      return null;
+    }
+
+    function parseTimeOnDate(timeStr, dateObj){
+      const s = clean(timeStr).toUpperCase();
+      const rx = /^(\d{1,2}):(\d{2})\s*(AM|PM)?$/;
+      const m = s.match(rx);
+      let hh=0, mm=0;
+      if (m){
+        hh = parseInt(m[1],10); mm = parseInt(m[2],10);
+        const ap = m[3];
+        if (ap==="PM" && hh!==12) hh+=12;
+        if (ap==="AM" && hh===12) hh=0;
+      } else {
+        const [H,Mi] = s.split(":").map(n=>parseInt(n,10)||0);
+        hh = H; mm = Mi;
+      }
+      return new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate(), hh, mm, 0, 0);
+    }
+
+    function computeStatus(when, now){
+      const minutesTo = (when - now) / 60000;
+      if (minutesTo > BOARDING_SOON_BEFORE) return { text: "On Time", cls: "" };
+      if (minutesTo > NOW_BOARDING_BEFORE)   return { text: "Boarding Soon", cls: "" };
+      if (minutesTo >= -CLOSED_AFTER)        return { text: "Now Boarding", cls: "status-now" };
+      return { text: "Closed", cls: "status-closed" };
+    }
+
+    async function loadData(){
+      const res = await fetch(SHEET_URL);
+      const data = await res.json();
+
+      const now = new Date();
+      const rows = [];
+
+      for (const r of data){
+        const d = dateIsTodayAndReturn(r.Date);
+        if (!d) continue; // only entries that resolve to *today* in either format
+
+        const when = parseTimeOnDate(r.Time, d);
+        const minutesSince = (now - when) / 60000;
+        if (minutesSince > HIDE_AFTER_MINUTES) continue; // hide 2h after start
+
+        rows.push({
+          when,
+          time: clean(r.Time),
+          name: clean(r.Name),
+          age: clean(r.Age)
+        });
+      }
+
+      rows.sort((a,b)=> a.when - b.when);
+
+      const tbody = document.querySelector("#departures tbody");
+      tbody.innerHTML = "";
+
+      rows.forEach((item, i) => {
+        const partyText = `${item.name}'s ${ordinal(item.age)} Birthday`;
+        const s = computeStatus(item.when, new Date());
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td><span class="flap">${item.time}</span></td>
+          <td><span class="flap">${partyText}</span></td>
+          <td><span class="flap ${s.cls}">${s.text}</span></td>
+        `;
+        setTimeout(()=>{ try{ flipSound.currentTime=0; flipSound.play(); }catch{} }, i*250);
+        tbody.appendChild(tr);
+      });
+    }
+
+    loadData();
+    setInterval(loadData, REFRESH_MS);
+  </script>
+
+<style>
+  #soundGate {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: rgba(0,0,0,0.85); color: #ffcc00; font-family: monospace;
+    z-index: 9999;
+  }
+  #soundGate button {
+    font-size: 1.25rem; padding: 12px 18px; border: 2px solid #ffcc00;
+    background: transparent; color: #ffcc00; border-radius: 10px;
+  }
+</style>
+
+<div id="soundGate" aria-label="Enable sound">
+  <div>
+    <p>Press OK to enable flip sound</p>
+    <button id="enableSoundBtn">Enable Sound</button>
+  </div>
+</div>
+
+<script>
+  const gate = document.getElementById('soundGate');
+  const btn = document.getElementById('enableSoundBtn');
+  btn.addEventListener('click', async () => {
+    const audio = document.getElementById('flipSound');
+    try { await audio.play(); audio.pause(); audio.currentTime = 0; } catch {}
+    gate.remove();
+  });
+</script>
+
+
+</body>
+</html>
