@@ -17,15 +17,15 @@
     th:nth-child(3),td:nth-child(3){text-align:right;padding-right:40px;white-space:nowrap}
 
     /* Status colours */
-    .status-now{color:#00e676}      /* green */
-    .status-closed{color:#ff5252}   /* red  */
-    .status-celebrate{color:#ffcc00}/* yellow (default) */
+    .status-now{color:#00e676}        /* green */
+    .status-closed{color:#ff5252}     /* red (used for "In Flight") */
+    .status-celebrate{color:#ffcc00}  /* yellow */
 
     /* Split-flap animation on inner span */
     .flap{display:inline-block;transform-origin:bottom;animation:flap .6s ease}
     @keyframes flap{0%{transform:rotateX(90deg);opacity:0}100%{transform:rotateX(0);opacity:1}}
 
-    /* Gentle pulse for "Now Boarding" after the initial flap */
+    /* Gentle pulse for "Now Boarding" */
     .flap.status-now{animation:flap .6s ease, pulse 3s ease-in-out .6s infinite}
     @keyframes pulse{0%{opacity:.55}50%{opacity:1}100%{opacity:.55}}
 
@@ -79,10 +79,9 @@
     const SHEET_URL = "https://opensheet.elk.sh/1C30nrkK_fqBK7i9c8_kABHPWkdETjaGMY3PyOifOI6k/1";
     const BOARDING_SOON_BEFORE = 15;     // mins before start
     const NOW_BOARDING_BEFORE = 10;      // mins before start (-> Now Boarding)
-    const CLOSED_AFTER = 10;             // mins after start (-> Closed)
+    const CLOSED_AFTER = 10;             // mins after start (-> In Flight)
     const HIDE_AFTER_MINUTES = 120;      // after 2 hours -> enter celebration
     const CELEBRATE_MINUTES = 15;        // show "Landed / Happy Birthday" for 15 min
-    const REFRESH_MS = 60000;            // refresh every 60s
 
     const flipSound = document.getElementById("flipSound");
 
@@ -152,18 +151,18 @@
         return { text: "Celebration", cls: "status-celebrate", kind: "celebrate" };
       }
 
-      if (minutesTo > BOARDING_SOON_BEFORE)   return { text: "On Time",       cls: "",             kind: "on_time" };
-      if (minutesTo > NOW_BOARDING_BEFORE)    return { text: "Boarding Soon", cls: "",             kind: "boarding_soon" };
-      if (minutesTo >= -CLOSED_AFTER)         return { text: "Now Boarding",  cls: "status-now",   kind: "now_boarding" };
-      return { text: "Closed",                cls: "status-closed",           kind: "closed" };
+      if (minutesTo > BOARDING_SOON_BEFORE)   return { text: "On Time",       cls: "",               kind: "on_time" };
+      if (minutesTo > NOW_BOARDING_BEFORE)    return { text: "Boarding Soon", cls: "",               kind: "boarding_soon" };
+      if (minutesTo >= -CLOSED_AFTER)         return { text: "Now Boarding",  cls: "status-now",     kind: "now_boarding" };
+      return { text: "In Flight",             cls: "status-closed",           kind: "in_flight" };   // <-- renamed from Closed
     }
 
-    // Status sorting priority: Now Boarding (0) → Boarding Soon (1) → Closed (2) → Celebration (3) → On Time (4)
+    // Status sorting priority: Now Boarding (0) → Boarding Soon (1) → In Flight (2) → Celebration (3) → On Time (4)
     function statusPriority(kind){
       if (kind === "now_boarding")   return 0;
       if (kind === "boarding_soon")  return 1;
-      if (kind === "closed")         return 2;
-      if (kind === "celebrate")      return 3; // <-- celebration above on time
+      if (kind === "in_flight")      return 2;
+      if (kind === "celebrate")      return 3;
       if (kind === "on_time")        return 4;
       return 5;
     }
@@ -237,9 +236,19 @@
       });
     }
 
-    // Initial + repeat refresh
+    // ===== Minute-aligned refresh =====
+    function scheduleNextMinuteRefresh(){
+      const now = Date.now();
+      const msToNextMinute = 60000 - (now % 60000);
+      setTimeout(async () => {
+        await loadData();
+        scheduleNextMinuteRefresh(); // schedule the next one on the next minute boundary
+      }, msToNextMinute + 25); // tiny buffer to ensure we’re past :00
+    }
+
+    // Initial load, then sync to the wall clock minute
     loadData();
-    setInterval(loadData, REFRESH_MS);
+    scheduleNextMinuteRefresh();
 
     // One-tap gate to enable the flip sound (autoplay policies)
     document.getElementById('enableSoundBtn').addEventListener('click', async () => {
