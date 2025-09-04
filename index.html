@@ -8,19 +8,18 @@
     body{background:#111;color:#ffcc00;font-family:monospace;margin:0}
     h1{margin:20px 0;text-align:center;font-size:3em}
     table{width:100%;border-collapse:collapse;font-size:2em;table-layout:fixed}
-    /* Give Status a bit more room */
+    /* Wider Status column to keep long text on one line */
     col.time{width:20%} col.party{width:55%} col.status{width:25%}
     thead th{background:#222}
     th,td{padding:20px;border-bottom:2px solid #333;vertical-align:middle}
     th:nth-child(1),td:nth-child(1){text-align:left;padding-left:40px}
     th:nth-child(2),td:nth-child(2){text-align:left}
-    th:nth-child(3),td:nth-child(3){
-      text-align:right;padding-right:40px;white-space:nowrap; /* prevent wrap */
-    }
+    th:nth-child(3),td:nth-child(3){text-align:right;padding-right:40px;white-space:nowrap}
 
     /* Status colours */
     .status-now{color:#00e676}      /* green */
     .status-closed{color:#ff5252}   /* red  */
+    .status-celebrate{color:#ffcc00}/* yellow (default) */
 
     /* Split-flap animation on inner span */
     .flap{display:inline-block;transform-origin:bottom;animation:flap .6s ease}
@@ -28,11 +27,7 @@
 
     /* Gentle pulse for "Now Boarding" after the initial flap */
     .flap.status-now{animation:flap .6s ease, pulse 3s ease-in-out .6s infinite}
-    @keyframes pulse{
-      0%{opacity:.55}
-      50%{opacity:1}
-      100%{opacity:.55}
-    }
+    @keyframes pulse{0%{opacity:.55}50%{opacity:1}100%{opacity:.55}}
 
     /* Sound gate (for the flip beep) */
     #soundGate{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.88);
@@ -82,10 +77,11 @@
   <script>
     // ===== Settings =====
     const SHEET_URL = "https://opensheet.elk.sh/1C30nrkK_fqBK7i9c8_kABHPWkdETjaGMY3PyOifOI6k/1";
-    const HIDE_AFTER_MINUTES = 120;      // hide 2 hours after start
     const BOARDING_SOON_BEFORE = 15;     // mins before start
     const NOW_BOARDING_BEFORE = 10;      // mins before start (-> Now Boarding)
     const CLOSED_AFTER = 10;             // mins after start (-> Closed)
+    const HIDE_AFTER_MINUTES = 120;      // after 2 hours -> enter celebration
+    const CELEBRATE_MINUTES = 15;        // show "Landed / Happy Birthday" for 15 min
     const REFRESH_MS = 60000;            // refresh every 60s
 
     const flipSound = document.getElementById("flipSound");
@@ -148,20 +144,32 @@
     }
 
     function computeStatus(when, now){
-      const minutesTo = (when - now) / 60000;  // >0 before, <0 after
-      if (minutesTo > BOARDING_SOON_BEFORE) return { text: "On Time", cls: "" };
-      if (minutesTo > NOW_BOARDING_BEFORE)   return { text: "Boarding Soon", cls: "" };
-      if (minutesTo >= -CLOSED_AFTER)        return { text: "Now Boarding", cls: "status-now" };
-      return { text: "Closed", cls: "status-closed" };
+      const minutesTo = (when - now) / 60000;   // >0 before start, <0 after start
+      const minutesSince = -minutesTo;
+
+      // Celebration window: 2h to 2h15 after start
+      if (minutesSince >= HIDE_AFTER_MINUTES && minutesSince <= HIDE_AFTER_MINUTES + CELEBRATE_MINUTES){
+        return { text: "Celebration", cls: "status-celebrate", kind: "celebrate" };
+      }
+
+      if (minutesTo > BOARDING_SOON_BEFORE)   return { text: "On Time",       cls: "",             kind: "on_time" };
+      if (minutesTo > NOW_BOARDING_BEFORE)    return { text: "Boarding Soon", cls: "",             kind: "boarding_soon" };
+      if (minutesTo >= -CLOSED_AFTER)         return { text: "Now Boarding",  cls: "status-now",   kind: "now_boarding" };
+      return { text: "Closed",                cls: "status-closed",           kind: "closed" };
     }
 
-    // Status sorting priority: Now Boarding (0) → Boarding Soon (1) → Closed (2) → On Time (3)
-    function statusPriority(txt){
-      if (txt === "Now Boarding") return 0;
-      if (txt === "Boarding Soon") return 1;
-      if (txt === "Closed") return 2;
-      return 3; // On Time (or anything else)
+    // Status sorting priority: Now Boarding (0) → Boarding Soon (1) → Closed (2) → Celebration (3) → On Time (4)
+    function statusPriority(kind){
+      if (kind === "now_boarding")   return 0;
+      if (kind === "boarding_soon")  return 1;
+      if (kind === "closed")         return 2;
+      if (kind === "celebrate")      return 3; // <-- celebration above on time
+      if (kind === "on_time")        return 4;
+      return 5;
     }
+
+    let celebrateNodes = []; // live references to celebration status spans
+    let celebrateToggle = false;
 
     async function loadData(){
       const res = await fetch(SHEET_URL);
@@ -172,11 +180,13 @@
 
       for (const r of data){
         const d = dateIsTodayAndReturn(r.Date);
-        if (!d) continue; // today only
+        if (!d) continue; // only today's entries
 
         const when = parseTimeOnDate(r.Time, d);
         const minutesSince = (now - when) / 60000;
-        if (minutesSince > HIDE_AFTER_MINUTES) continue; // hide after 2h
+
+        // Keep rows up to 2h15 after start; hide after that
+        if (minutesSince > HIDE_AFTER_MINUTES + CELEBRATE_MINUTES) continue;
 
         const s = computeStatus(when, now);
 
@@ -187,7 +197,8 @@
           age: clean(r.Age),
           statusText: s.text,
           statusClass: s.cls,
-          statusOrder: statusPriority(s.text)
+          statusKind: s.kind,
+          statusOrder: statusPriority(s.kind)
         });
       }
 
@@ -199,17 +210,30 @@
 
       const tbody = document.querySelector("#departures tbody");
       tbody.innerHTML = "";
+      celebrateNodes = []; // reset
 
       rows.forEach((item, i) => {
         const partyText = `${item.name}'s ${ordinal(item.age)} Birthday`;
+
         const tr = document.createElement("tr");
+        // Celebration rows flip between messages (no emoji)
+        const statusSpan = (item.statusKind === "celebrate")
+          ? `<span class="flap ${item.statusClass} celebrate-text">${celebrateToggle ? "Happy Birthday!" : "Landed"}</span>`
+          : `<span class="flap ${item.statusClass}">${item.statusText}</span>`;
+
         tr.innerHTML = `
           <td><span class="flap">${item.time}</span></td>
           <td><span class="flap">${partyText}</span></td>
-          <td><span class="flap ${item.statusClass}">${item.statusText}</span></td>
+          <td>${statusSpan}</td>
         `;
+
         setTimeout(()=>{ try{ flipSound.currentTime=0; flipSound.play(); }catch{} }, i*250);
         tbody.appendChild(tr);
+
+        if (item.statusKind === "celebrate") {
+          const node = tr.querySelector(".celebrate-text");
+          if (node) celebrateNodes.push(node);
+        }
       });
     }
 
@@ -231,6 +255,13 @@
     }
     updateClock();
     setInterval(updateClock, 1000);
+
+    // ===== Celebration flasher (toggle text every ~1.5s) =====
+    setInterval(()=>{
+      celebrateToggle = !celebrateToggle;
+      const text = celebrateToggle ? "Happy Birthday!" : "Landed";
+      for (const el of celebrateNodes) el.textContent = text;
+    }, 1500);
   </script>
 </body>
 </html>
