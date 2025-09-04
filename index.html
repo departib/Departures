@@ -8,12 +8,15 @@
     body{background:#111;color:#ffcc00;font-family:monospace;margin:0}
     h1{margin:20px 0;text-align:center;font-size:3em}
     table{width:100%;border-collapse:collapse;font-size:2em;table-layout:fixed}
-    col.time{width:20%} col.party{width:60%} col.status{width:20%}
+    /* Give Status a bit more room */
+    col.time{width:20%} col.party{width:55%} col.status{width:25%}
     thead th{background:#222}
     th,td{padding:20px;border-bottom:2px solid #333;vertical-align:middle}
     th:nth-child(1),td:nth-child(1){text-align:left;padding-left:40px}
     th:nth-child(2),td:nth-child(2){text-align:left}
-    th:nth-child(3),td:nth-child(3){text-align:right;padding-right:40px}
+    th:nth-child(3),td:nth-child(3){
+      text-align:right;padding-right:40px;white-space:nowrap; /* prevent wrap */
+    }
 
     /* Status colours */
     .status-now{color:#00e676}      /* green */
@@ -22,6 +25,14 @@
     /* Split-flap animation on inner span */
     .flap{display:inline-block;transform-origin:bottom;animation:flap .6s ease}
     @keyframes flap{0%{transform:rotateX(90deg);opacity:0}100%{transform:rotateX(0);opacity:1}}
+
+    /* Gentle pulse for "Now Boarding" after the initial flap */
+    .flap.status-now{animation:flap .6s ease, pulse 3s ease-in-out .6s infinite}
+    @keyframes pulse{
+      0%{opacity:.55}
+      50%{opacity:1}
+      100%{opacity:.55}
+    }
 
     /* Sound gate (for the flip beep) */
     #soundGate{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.88);
@@ -167,7 +178,6 @@
         const minutesSince = (now - when) / 60000;
         if (minutesSince > HIDE_AFTER_MINUTES) continue; // hide after 2h
 
-        // Compute status now so we can sort by it
         const s = computeStatus(when, now);
 
         rows.push({
