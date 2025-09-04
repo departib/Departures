@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta name="robots" content="noindex,nofollow">
   <meta charset="UTF-8" />
   <title>Inflatabubble Departures</title>
+  <meta name="robots" content="noindex,nofollow">
   <style>
     body{background:#111;color:#ffcc00;font-family:monospace;margin:0}
     h1{margin:20px 0;text-align:center;font-size:3em}
@@ -14,14 +14,37 @@
     th:nth-child(1),td:nth-child(1){text-align:left;padding-left:40px}
     th:nth-child(2),td:nth-child(2){text-align:left}
     th:nth-child(3),td:nth-child(3){text-align:right;padding-right:40px}
-    .status-now{color:#00e676}
-    .status-closed{color:#ff5252}
+
+    /* Status colours */
+    .status-now{color:#00e676}      /* green */
+    .status-closed{color:#ff5252}   /* red  */
+
+    /* Split-flap animation on inner span */
     .flap{display:inline-block;transform-origin:bottom;animation:flap .6s ease}
     @keyframes flap{0%{transform:rotateX(90deg);opacity:0}100%{transform:rotateX(0);opacity:1}}
+
+    /* Sound gate (for the flip beep) */
+    #soundGate{position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.88);
+      color:#ffcc00;font-family:monospace;z-index:9999}
+    #soundGate .wrap{display:grid;gap:12px;place-items:center}
+    #soundGate button{font-size:1.1rem;padding:12px 18px;border:2px solid #ffcc00;background:transparent;
+      color:#ffcc00;border-radius:10px;cursor:pointer}
+
+    /* Clock (top-right) */
+    #clock{
+      position:fixed; top:12px; right:20px;
+      font-size:1.6rem; letter-spacing:1px;
+      background:rgba(0,0,0,0.25);
+      padding:6px 12px; border-radius:10px;
+    }
   </style>
 </head>
 <body>
   <h1>✈ Departures</h1>
+
+  <!-- Clock -->
+  <div id="clock" aria-label="Current time">--:--:--</div>
+
   <table id="departures">
     <colgroup>
       <col class="time" />
@@ -34,19 +57,29 @@
     <tbody></tbody>
   </table>
 
+  <!-- Flip sound -->
   <audio id="flipSound" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" preload="auto"></audio>
 
+  <!-- Tap once to enable the flip sound (some browsers block autoplay) -->
+  <div id="soundGate" aria-label="Enable sound">
+    <div class="wrap">
+      <div>Press OK to enable flip sound</div>
+      <button id="enableSoundBtn">Enable Sound</button>
+    </div>
+  </div>
+
   <script>
-    // ---- Settings ----
+    // ===== Settings =====
     const SHEET_URL = "https://opensheet.elk.sh/1C30nrkK_fqBK7i9c8_kABHPWkdETjaGMY3PyOifOI6k/1";
     const HIDE_AFTER_MINUTES = 120;      // hide 2 hours after start
     const BOARDING_SOON_BEFORE = 15;     // mins before start
-    const NOW_BOARDING_BEFORE = 10;      // mins before start
-    const CLOSED_AFTER = 10;             // mins after start (then show Closed)
-    const REFRESH_MS = 60000;            // 60s
+    const NOW_BOARDING_BEFORE = 10;      // mins before start (-> Now Boarding)
+    const CLOSED_AFTER = 10;             // mins after start (-> Closed)
+    const REFRESH_MS = 60000;            // refresh every 60s
+
     const flipSound = document.getElementById("flipSound");
 
-    // ---- Helpers ----
+    // ===== Helpers =====
     const clean = s => String(s||"").replace(/\u202F|\u00A0/g," ").replace(/â€¯/g," ").trim();
 
     function ordinal(n){
@@ -63,32 +96,25 @@
       return `${yy}-${mm}-${dd}`;
     }
 
-    // Parse a sheet date string and return a Date *only if it equals today* in either MM/DD or DD/MM (or ISO)
-    function dateIsTodayAndReturn(s){
-      const t = clean(s);
+    // Accept YYYY-MM-DD, or MM/DD[/YY|YYYY], or DD/MM[/YY|YYYY] (match today only)
+    function dateIsTodayAndReturn(raw){
+      const t = clean(raw);
       if (!t) return null;
 
       const today = new Date();
       const todayKey = ymd(new Date(today.getFullYear(), today.getMonth(), today.getDate()));
 
-      // ISO YYYY-MM-DD first
       if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(t)) {
         const [Y,M,D] = t.split("-").map(n=>parseInt(n,10));
         const d = new Date(Y, M-1, D);
         return (ymd(d)===todayKey) ? d : null;
       }
-
-      // Slashed date (ambiguous): try BOTH MM/DD and DD/MM
       const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
       if (m){
         let a = parseInt(m[1],10), b = parseInt(m[2],10), c = parseInt(m[3],10);
         if (c < 100) c += 2000;
-
-        const dUS = new Date(c, a-1, b); // MM/DD
-        if (ymd(dUS) === todayKey) return dUS;
-
-        const dEU = new Date(c, b-1, a); // DD/MM
-        if (ymd(dEU) === todayKey) return dEU;
+        const dUS = new Date(c, a-1, b); if (ymd(dUS)===todayKey) return dUS; // MM/DD
+        const dEU = new Date(c, b-1, a); if (ymd(dEU)===todayKey) return dEU; // DD/MM
       }
       return null;
     }
@@ -111,11 +137,19 @@
     }
 
     function computeStatus(when, now){
-      const minutesTo = (when - now) / 60000;
+      const minutesTo = (when - now) / 60000;  // >0 before, <0 after
       if (minutesTo > BOARDING_SOON_BEFORE) return { text: "On Time", cls: "" };
       if (minutesTo > NOW_BOARDING_BEFORE)   return { text: "Boarding Soon", cls: "" };
       if (minutesTo >= -CLOSED_AFTER)        return { text: "Now Boarding", cls: "status-now" };
       return { text: "Closed", cls: "status-closed" };
+    }
+
+    // Status sorting priority: Now Boarding (0) → Boarding Soon (1) → Closed (2) → On Time (3)
+    function statusPriority(txt){
+      if (txt === "Now Boarding") return 0;
+      if (txt === "Boarding Soon") return 1;
+      if (txt === "Closed") return 2;
+      return 3; // On Time (or anything else)
     }
 
     async function loadData(){
@@ -127,72 +161,66 @@
 
       for (const r of data){
         const d = dateIsTodayAndReturn(r.Date);
-        if (!d) continue; // only entries that resolve to *today* in either format
+        if (!d) continue; // today only
 
         const when = parseTimeOnDate(r.Time, d);
         const minutesSince = (now - when) / 60000;
-        if (minutesSince > HIDE_AFTER_MINUTES) continue; // hide 2h after start
+        if (minutesSince > HIDE_AFTER_MINUTES) continue; // hide after 2h
+
+        // Compute status now so we can sort by it
+        const s = computeStatus(when, now);
 
         rows.push({
           when,
           time: clean(r.Time),
           name: clean(r.Name),
-          age: clean(r.Age)
+          age: clean(r.Age),
+          statusText: s.text,
+          statusClass: s.cls,
+          statusOrder: statusPriority(s.text)
         });
       }
 
-      rows.sort((a,b)=> a.when - b.when);
+      // Sort by status group first, then by time ascending
+      rows.sort((a,b)=>{
+        if (a.statusOrder !== b.statusOrder) return a.statusOrder - b.statusOrder;
+        return a.when - b.when;
+      });
 
       const tbody = document.querySelector("#departures tbody");
       tbody.innerHTML = "";
 
       rows.forEach((item, i) => {
         const partyText = `${item.name}'s ${ordinal(item.age)} Birthday`;
-        const s = computeStatus(item.when, new Date());
         const tr = document.createElement("tr");
         tr.innerHTML = `
           <td><span class="flap">${item.time}</span></td>
           <td><span class="flap">${partyText}</span></td>
-          <td><span class="flap ${s.cls}">${s.text}</span></td>
+          <td><span class="flap ${item.statusClass}">${item.statusText}</span></td>
         `;
         setTimeout(()=>{ try{ flipSound.currentTime=0; flipSound.play(); }catch{} }, i*250);
         tbody.appendChild(tr);
       });
     }
 
+    // Initial + repeat refresh
     loadData();
     setInterval(loadData, REFRESH_MS);
+
+    // One-tap gate to enable the flip sound (autoplay policies)
+    document.getElementById('enableSoundBtn').addEventListener('click', async () => {
+      try { await flipSound.play(); flipSound.pause(); flipSound.currentTime = 0; } catch {}
+      document.getElementById('soundGate').remove();
+    });
+
+    // ===== Clock =====
+    function updateClock(){
+      const now = new Date();
+      const t = now.toLocaleTimeString('en-GB', { hour12:false });
+      document.getElementById('clock').textContent = t;
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
   </script>
-
-<style>
-  #soundGate {
-    position: fixed; inset: 0; display: grid; place-items: center;
-    background: rgba(0,0,0,0.85); color: #ffcc00; font-family: monospace;
-    z-index: 9999;
-  }
-  #soundGate button {
-    font-size: 1.25rem; padding: 12px 18px; border: 2px solid #ffcc00;
-    background: transparent; color: #ffcc00; border-radius: 10px;
-  }
-</style>
-
-<div id="soundGate" aria-label="Enable sound">
-  <div>
-    <p>Press OK to enable flip sound</p>
-    <button id="enableSoundBtn">Enable Sound</button>
-  </div>
-</div>
-
-<script>
-  const gate = document.getElementById('soundGate');
-  const btn = document.getElementById('enableSoundBtn');
-  btn.addEventListener('click', async () => {
-    const audio = document.getElementById('flipSound');
-    try { await audio.play(); audio.pause(); audio.currentTime = 0; } catch {}
-    gate.remove();
-  });
-</script>
-
-
 </body>
 </html>
