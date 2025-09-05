@@ -90,6 +90,7 @@
 
     function ordinal(n){
       const x = parseInt(n,10);
+      if (isNaN(x)) return ""; // no ordinal if not a number
       if ([11,12,13].includes(x % 100)) return x + "th";
       const last = x % 10;
       return x + (last===1?"st":last===2?"nd":last===3?"rd":"th");
@@ -154,7 +155,7 @@
       if (minutesTo > BOARDING_SOON_BEFORE)   return { text: "On Time",       cls: "",               kind: "on_time" };
       if (minutesTo > NOW_BOARDING_BEFORE)    return { text: "Boarding Soon", cls: "",               kind: "boarding_soon" };
       if (minutesTo >= -CLOSED_AFTER)         return { text: "Now Boarding",  cls: "status-now",     kind: "now_boarding" };
-      return { text: "In Flight",             cls: "status-closed",           kind: "in_flight" };   // <-- renamed from Closed
+      return { text: "In Flight",             cls: "status-closed",           kind: "in_flight" };   // red
     }
 
     // Status sorting priority: Now Boarding (0) → Boarding Soon (1) → In Flight (2) → Celebration (3) → On Time (4)
@@ -193,7 +194,7 @@
           when,
           time: clean(r.Time),
           name: clean(r.Name),
-          age: clean(r.Age),
+          age: clean(r.Age),       // may be blank
           statusText: s.text,
           statusClass: s.cls,
           statusKind: s.kind,
@@ -212,10 +213,13 @@
       celebrateNodes = []; // reset
 
       rows.forEach((item, i) => {
-        const partyText = `${item.name}'s ${ordinal(item.age)} Birthday`;
+        // Age optional: if blank/non-numeric -> no age text
+        const hasAge = /^\d+$/.test(item.age);
+        const partyText = hasAge
+          ? `${item.name}'s ${ordinal(item.age)} Birthday`
+          : `${item.name}'s Birthday`;
 
         const tr = document.createElement("tr");
-        // Celebration rows flip between messages (no emoji)
         const statusSpan = (item.statusKind === "celebrate")
           ? `<span class="flap ${item.statusClass} celebrate-text">${celebrateToggle ? "Happy Birthday!" : "Landed"}</span>`
           : `<span class="flap ${item.statusClass}">${item.statusText}</span>`;
@@ -242,8 +246,8 @@
       const msToNextMinute = 60000 - (now % 60000);
       setTimeout(async () => {
         await loadData();
-        scheduleNextMinuteRefresh(); // schedule the next one on the next minute boundary
-      }, msToNextMinute + 25); // tiny buffer to ensure we’re past :00
+        scheduleNextMinuteRefresh();
+      }, msToNextMinute + 25);
     }
 
     // Initial load, then sync to the wall clock minute
